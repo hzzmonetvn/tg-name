@@ -187,6 +187,8 @@ def format_dashboard(lang: str = None):
         status_line = get_text("status_stopped", lang)
     elif state.is_paused:
         status_line = get_text("status_paused", lang)
+    elif not engine.user_client or not engine.user_client.is_connected():
+        status_line = get_text("status_disconnected", lang)
     else:
         status_line = get_text("status_running", lang)
 
@@ -1189,9 +1191,10 @@ def register_bot_handlers(bot_client: TelegramClient):
                 )
                 await event.reply(success_msg, parse_mode="html", buttons=get_main_keyboard())
 
-                # Tự động kích hoạt updater nếu chưa chạy
-                if not engine.is_running:
-                    await engine.start()
+                # Tự động kích hoạt updater
+                if engine.is_running:
+                    await engine.stop()
+                await engine.start()
 
             except SessionPasswordNeededError:
                 # Cần mật khẩu 2 bước (2FA)
@@ -1239,8 +1242,9 @@ def register_bot_handlers(bot_client: TelegramClient):
                 )
                 await event.reply(success_msg, parse_mode="html", buttons=get_main_keyboard())
 
-                if not engine.is_running:
-                    await engine.start()
+                if engine.is_running:
+                    await engine.stop()
+                await engine.start()
 
             except Exception as e:
                 await msg_pwd.delete()

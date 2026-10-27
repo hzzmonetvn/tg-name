@@ -11,8 +11,9 @@ __pycache__/
 *$py.class
 *.so
 
-# Logs
+# Logs & Progress Checkpoints
 *.log
+forward_progress_*.json
 
 # Editor & OS files
 .DS_Store

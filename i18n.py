@@ -150,6 +150,10 @@ TEXTS: Dict[str, Dict[str, str]] = {
         "vi": "🟢 <b>Đang chạy bình thường</b>",
         "en": "🟢 <b>Running Normally</b>"
     },
+    "status_disconnected": {
+        "vi": "🟡 <b>Mất kết nối Telegram (Đang kết nối lại...)</b>",
+        "en": "🟡 <b>Disconnected from Telegram (Reconnecting...)</b>"
+    },
     "not_logged_in": {
         "vi": "<i>Chưa đăng nhập</i>",
         "en": "<i>Not logged in</i>"

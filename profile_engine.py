@@ -460,6 +460,47 @@ class ProfileEngine:
         self.updater_task = None
         self.is_running = False
 
+    async def ensure_connected(self) -> bool:
+        """Đảm bảo user_client luôn được kết nối và xác thực với Telegram"""
+        try:
+            need_register = False
+            if self.user_client is None:
+                state.reload_config()
+                raw_api_id = state.config.get("API_ID", "2040")
+                api_id = int(raw_api_id) if raw_api_id.isdigit() else 2040
+                api_hash = state.config.get("API_HASH", "b18441a1ff607e10a989891a5462e627")
+                session_string = state.config.get("SESSION_STRING", "")
+                session_name = state.config.get("SESSION_NAME", "bot")
+
+                if session_string:
+                    self.user_client = TelegramClient(StringSession(session_string), api_id, api_hash)
+                elif os.path.exists(f"{session_name}.session"):
+                    self.user_client = TelegramClient(session_name, api_id, api_hash)
+                else:
+                    state.last_error = "Chưa có session đăng nhập Telegram"
+                    return False
+                need_register = True
+
+            if not self.user_client.is_connected():
+                print("[🔄] Userbot đang thử kết nối lại Telegram...")
+                await asyncio.wait_for(self.user_client.connect(), timeout=15)
+                if not await asyncio.wait_for(self.user_client.is_user_authorized(), timeout=10):
+                    state.last_error = "Phiên đăng nhập không hợp lệ hoặc đã hết hạn"
+                    print("[❌] Userbot: Phiên đăng nhập không hợp lệ hoặc đã hết hạn.")
+                    return False
+                if need_register:
+                    try:
+                        from helper_bot import register_userbot_handlers
+                        register_userbot_handlers(self.user_client)
+                    except Exception as e:
+                        print(f"[⚠️] Không thể đăng ký lệnh userbot: {e}")
+
+            return True
+        except Exception as e:
+            state.last_error = f"Lỗi kết nối Userbot: {e}"
+            print(f"[⚠️] Lỗi kết nối Userbot: {e}")
+            return False
+
     async def start(self):
         """Khởi động tiến trình cập nhật profile"""
         if self.is_running:
@@ -484,8 +525,8 @@ class ProfileEngine:
             else:
                 self.user_client = TelegramClient(session_name, api_id, api_hash)
 
-            await self.user_client.connect()
-            if not await self.user_client.is_user_authorized():
+            await asyncio.wait_for(self.user_client.connect(), timeout=15)
+            if not await asyncio.wait_for(self.user_client.is_user_authorized(), timeout=10):
                 await self.user_client.disconnect()
                 return False, "Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại!"
 
@@ -527,9 +568,12 @@ class ProfileEngine:
                 pass
             self.updater_task = None
 
-        if self.user_client and self.user_client.is_connected():
-            await self.user_client.disconnect()
-            self.user_client = None
+        try:
+            if self.user_client and self.user_client.is_connected():
+                await self.user_client.disconnect()
+        except Exception:
+            pass
+        self.user_client = None
 
         print("[🛑] Profile Updater đã dừng.")
         return True, "Đã dừng Profile Updater thành công."
@@ -614,25 +658,53 @@ class ProfileEngine:
                 state.current_bio = new_bio
 
                 # Cập nhật Profile Telegram
-                if self.user_client and self.user_client.is_connected():
+                is_ready = await self.ensure_connected()
+                if not is_ready:
+                    print(f"[⚠️] Chưa thể kết nối Userbot tới Telegram ({state.last_error}). Đang chờ chu kỳ tiếp theo để thử lại...")
+                else:
                     try:
-                        await self.user_client(UpdateProfileRequest(first_name=new_name, about=new_bio))
+                        await asyncio.wait_for(
+                            self.user_client(UpdateProfileRequest(first_name=new_name, about=new_bio)),
+                            timeout=25
+                        )
                         state.last_update_time = now.strftime("%H:%M:%S (%d/%m)")
                         state.update_count += 1
                         state.last_error = ""
                         print(f"[✅] {gio} Đã cập nhật | Tên: {new_name} | Bio: {new_bio}")
+                    except asyncio.TimeoutError:
+                        state.last_error = "UpdateProfileRequest timeout (>25s)"
+                        print(f"[⏳] Telegram phản hồi chậm (>25s), đóng kết nối để thử lại...")
+                        try:
+                            await self.user_client.disconnect()
+                        except Exception:
+                            pass
                     except FloodWaitError as e:
                         state.last_error = f"FloodWait ({e.seconds}s)"
                         print(f"[⏳] FloodWait: Chờ {e.seconds} giây...")
                         await asyncio.sleep(e.seconds)
                     except AboutTooLongError:
                         fallback_bio = f"📍 {city} ⏰ {gio}"
-                        await self.user_client(UpdateProfileRequest(first_name=new_name, about=fallback_bio))
-                        state.current_bio = fallback_bio
-                        print(f"[⚠️] Bio quá 70 ký tự, đã rút gọn: {fallback_bio}")
+                        try:
+                            await asyncio.wait_for(
+                                self.user_client(UpdateProfileRequest(first_name=new_name, about=fallback_bio)),
+                                timeout=25
+                            )
+                            state.current_bio = fallback_bio
+                            state.last_update_time = now.strftime("%H:%M:%S (%d/%m)")
+                            state.update_count += 1
+                            state.last_error = ""
+                            print(f"[⚠️] Bio quá 70 ký tự, đã rút gọn: {fallback_bio}")
+                        except Exception as e_fb:
+                            print(f"[❌] Lỗi khi gửi fallback bio: {e_fb}")
                     except Exception as e:
                         state.last_error = str(e)
                         print(f"[❌] Lỗi cập nhật profile: {e}")
+                        err_msg = str(e).lower()
+                        if any(k in err_msg for k in ["connection", "socket", "reset", "broken", "disconnected", "rpc", "500", "worker"]):
+                            try:
+                                await self.user_client.disconnect()
+                            except Exception:
+                                pass
 
                 now = datetime.now(tz)
                 sleep_time = max(1, 60 - now.second)

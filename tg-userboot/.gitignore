@@ -1,0 +1,10 @@
+# Compiled binaries
+bin/
+userboot
+
+# Session files
+*.session
+*.session-journal
+
+# Environment variables
+.env
