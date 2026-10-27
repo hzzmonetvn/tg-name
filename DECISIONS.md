@@ -104,7 +104,14 @@ Author: **hzzmonetvn**
 
 ---
 
-## 11. MTProto Peer AccessHash Caching, Execution Contexts & Channel-Aware Deletions
+## 12. Native Telethon Userbot Plugin Suite Integration (`plain_plugins.py`)
+
+- **Decision**: Architect and integrate `plain_plugins.py` directly into `helper_bot.py:register_userbot_handlers()`, allowing all Plain-UB and PlainUB-Extras command suites (`.ai`, `.img`, `.ping`, `.alive`, `.id`, `.info`, `.leave`, `.block`, `.unblock`, `.del`, `.pin`, `.unpin`, `.ban`, `.unban`, `.kick`, `.mute`, `.unmute`, `.tr`, `.cash`, `.wiki`, `.google`, `.makeqr`, `.neofetch`, `.joke`, `.cowsay`, `.shrug`, `.decide`) to be immediately active on the live running Python Telethon bot process (`tele-updater`).
+- **Considered & Rejected**:
+  - *Option A: Only maintaining the Go rewrite without integrating into the active Python PM2 service*: Rejected because the user's primary live profile updater runs on PM2 as `tele-updater` (`name.py` + `helper_bot.py`), meaning the userbot account would lack Plain-UB commands until fully switched over to Go.
+  - *Option B: Separate PM2 process for Python userbot plugins*: Rejected because Telethon sessions cannot be shared across two concurrent client instances with the same session string without generating auth key collisions and `AUTH_KEY_DUPLICATED` errors.
+- **Why**: Hooking the command dispatcher directly into `self.user_client` in `register_userbot_handlers()` provides instant feature parity on the user's active session without interrupting the live profile updater or colliding with active session files.
+
 
 - **Decision**:
   1. *Peer AccessHash Caching*: Maintain an in-memory `EntityCache` in `pkg/dispatcher` that dynamically extracts and stores `AccessHash` values for users and channels from incoming MTProto `Updates` / `UpdatesCombined`. When creating `InputPeerUser` or `InputPeerChannel`, access hashes are retrieved to prevent MTProto `CHANNEL_INVALID` or `PEER_ID_INVALID` RPC errors.

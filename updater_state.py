@@ -60,7 +60,15 @@ class UpdaterState:
             "TIMEZONE": os.getenv("TIMEZONE", "Asia/Ho_Chi_Minh").strip(),
             "NAME_FORMAT": name_val.strip(),
             "BIO_FORMAT": bio_val.strip(),
-            "LANGUAGE": os.getenv("LANGUAGE", "vi").strip().lower()
+            "LANGUAGE": os.getenv("LANGUAGE", "vi").strip().lower(),
+            "AI_API_KEY": os.getenv("AI_API_KEY", "").strip(),
+            "AI_BASE_URL": os.getenv("AI_BASE_URL", "https://api.openai.com/v1").strip(),
+            "AI_MODEL": os.getenv("AI_MODEL", "gpt-4o-mini").strip(),
+            "AI_SYSTEM_PROMPT": os.getenv("AI_SYSTEM_PROMPT", "You are a helpful and concise Telegram AI assistant.").strip(),
+            "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", "").strip(),
+            "IMAGE_API_KEY": os.getenv("IMAGE_API_KEY", "").strip(),
+            "IMAGE_BASE_URL": os.getenv("IMAGE_BASE_URL", "").strip(),
+            "IMAGE_MODEL": os.getenv("IMAGE_MODEL", "dall-e-3").strip(),
         }
 
     def update_config(self, updates: dict):

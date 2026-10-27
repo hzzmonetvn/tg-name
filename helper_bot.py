@@ -34,6 +34,10 @@ from telethon.errors import (
 from updater_state import state
 from profile_engine import engine, generate_preview, get_lastfm_track
 from i18n import get_text, get_weekday, get_month_name, LANGUAGES
+try:
+    from plain_plugins import register_plugins
+except ImportError:
+    register_plugins = None
 
 # Lưu trạng thái đàm thoại của user: user_id -> {"action": ..., "data": ...}
 user_sessions = {}
@@ -349,7 +353,13 @@ def format_bio_preview_card(lang: str = None):
 # ============================================================
 
 def register_userbot_handlers(client: TelegramClient):
-    """Đăng ký các lệnh tự điều khiển trên Userbot (.status, .name, .update, ...)"""
+    """Đăng ký các lệnh tự điều khiển trên Userbot (.status, .name, .update, ...) kèm toàn bộ Plain-UB plugins"""
+    if register_plugins:
+        try:
+            register_plugins(client)
+        except Exception as e:
+            print(f"[⚠️] Không thể nạp plain_plugins: {e}")
+
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(help|status|update|name|setname|basename|city|pause|resume|nameformat|setnameformat|bioformat|setbio|lastfm|music|bio|previewbio|preview|weather|lang)(?:\s+([\s\S]+))?$"))
     async def userbot_command_handler(event):
         cmd = event.pattern_match.group(1).lower()
@@ -359,45 +369,85 @@ def register_userbot_handlers(client: TelegramClient):
         if cmd == "help":
             if cur_lang == "en":
                 help_text = (
-                    "🛠 <b>USERBOT PROFILE CONTROLLER COMMANDS</b>\n"
+                    "🛠 <b>TG-USERBOOT & PROFILE UPDATER COMMANDS</b>\n"
                     "━━━━━━━━━━━━━━━━━━━━━\n"
-                    "• <code>.name &lt;new name&gt;</code> : Change BASE_NAME (e.g. <code>.name HzzMonet</code>)\n"
-                    "• <code>.nameformat &lt;fmt&gt;</code> : Change name format (e.g. <code>.nameformat {base_name} | HH:mm - DD/MM/YYYY</code>)\n"
-                    "• <code>.bio &lt;fmt&gt;</code> / <code>.bioformat &lt;fmt&gt;</code> : Change bio format (e.g. <code>.bio {weather} ⏰ HH:mm</code>)\n"
-                    "• <code>.bio</code> / <code>.previewbio</code> : Bio preview & 70-character limit check\n"
-                    "• <code>.weather</code> : View detailed weather info\n"
+                    "<b>[🤖 AI & Images]</b>\n"
+                    "• <code>.ai &lt;query/reply&gt;</code> : Chat with AI (Custom endpoint/model)\n"
+                    "• <code>.img &lt;prompt&gt;</code> : Generate AI images\n\n"
+                    "<b>[👤 Profile Controller]</b>\n"
+                    "• <code>.name &lt;new name&gt;</code> : Change BASE_NAME\n"
+                    "• <code>.nameformat &lt;fmt&gt;</code> : Custom name pattern\n"
+                    "• <code>.bio &lt;fmt&gt;</code> : Custom bio pattern\n"
                     "• <code>.preview</code> : Preview Name & Bio\n"
-                    "• <code>.lang &lt;vi|en&gt;</code> : Switch language (Tiếng Việt / English)\n"
-                    "• <code>.lastfm &lt;username&gt;</code> : Connect Last.fm music account\n"
+                    "• <code>.weather</code> : View weather details\n"
                     "• <code>.music</code> : View currently playing track\n"
                     "• <code>.city &lt;city&gt;</code> : Change weather city\n"
                     "• <code>.update</code> : Force profile update now\n"
                     "• <code>.status</code> : View updater status\n"
                     "• <code>.pause</code> / <code>.resume</code> : Pause / Resume\n"
-                    "• <code>.help</code> : Show this help message\n\n"
-                    "<b>Weather placeholders:</b> <code>{weather}</code>, <code>{weather_short}</code>, <code>{temp}</code>, <code>{feels_like}</code>, <code>{humidity}</code>, <code>{wind}</code>, <code>{weather_desc}</code>\n"
-                    "<b>Music placeholders:</b> <code>{music}</code>, <code>{music_or_weather}</code>, <code>{track}</code>, <code>{artist}</code>"
+                    "• <code>.lang &lt;vi|en&gt;</code> : Switch language (Tiếng Việt / English)\n\n"
+                    "<b>[⚙️ Tools & Diagnostics]</b>\n"
+                    "• <code>.ping</code> : Check response latency\n"
+                    "• <code>.alive</code> : Check bot status & system uptime\n"
+                    "• <code>.id</code> : Get chat, message & user IDs\n"
+                    "• <code>.info &lt;reply/user&gt;</code> : User info & DC\n"
+                    "• <code>.leave</code> : Leave current chat/channel\n"
+                    "• <code>.block</code> / <code>.unblock</code> : Block/unblock user\n\n"
+                    "<b>[🛡️ Admin]</b>\n"
+                    "• <code>.del</code> : Delete replied message\n"
+                    "• <code>.pin</code> / <code>.unpin</code> : Pin/unpin replied message\n"
+                    "• <code>.ban</code> / <code>.unban</code> : Ban/unban user\n"
+                    "• <code>.kick</code> : Kick user from group\n"
+                    "• <code>.mute</code> / <code>.unmute</code> : Mute/unmute user\n\n"
+                    "<b>[🌐 Utilities & Fun]</b>\n"
+                    "• <code>.tr &lt;lang&gt; &lt;text/reply&gt;</code> : Instant translate\n"
+                    "• <code>.cash &lt;amt&gt; &lt;from&gt; &lt;to&gt;</code> : Currency exchange\n"
+                    "• <code>.wiki &lt;query&gt;</code> : Wikipedia search\n"
+                    "• <code>.makeqr &lt;text/link&gt;</code> : Generate QR code\n"
+                    "• <code>.neofetch</code> : System hardware & OS specs\n"
+                    "• <code>.joke</code> / <code>.cowsay</code> / <code>.decide</code> : Entertainment\n"
+                    "━━━━━━━━━━━━━━━━━━━━━"
                 )
             else:
                 help_text = (
-                    "🛠 <b>LỆNH ĐIỀU KHIỂN PROFILE USERBOT</b>\n"
+                    "🛠 <b>DANH SÁCH LỆNH TG-USERBOOT & PROFILE UPDATER</b>\n"
                     "━━━━━━━━━━━━━━━━━━━━━\n"
+                    "<b>[🤖 Trí tuệ nhân tạo (AI)]</b>\n"
+                    "• <code>.ai &lt;câu hỏi/reply&gt;</code> : Trò chuyện AI (Custom model/endpoint)\n"
+                    "• <code>.img &lt;mô tả&gt;</code> : Vẽ và tạo ảnh AI\n\n"
+                    "<b>[👤 Điều khiển Profile]</b>\n"
                     "• <code>.name &lt;tên mới&gt;</code> : Đổi BASE_NAME (Ví dụ: <code>.name HzzMonet</code>)\n"
-                    "• <code>.nameformat &lt;mẫu&gt;</code> : Đổi định dạng tên (Ví dụ: <code>.nameformat {base_name} | HH:mm - DD/MM/YYYY</code>)\n"
-                    "• <code>.bio &lt;mẫu&gt;</code> / <code>.bioformat &lt;mẫu&gt;</code> : Đổi định dạng bio (Ví dụ: <code>.bio {weather} ⏰ HH:mm</code>)\n"
-                    "• <code>.bio</code> / <code>.previewbio</code> : Xem trước Bio & kiểm tra độ dài 70 ký tự\n"
-                    "• <code>.weather</code> : Xem chi tiết thời tiết (nhiệt độ, độ ẩm, gió, bình minh/hoàng hôn)\n"
-                    "• <code>.preview</code> : Xem trước Tên và Bio hiện tại\n"
-                    "• <code>.lang &lt;vi|en&gt;</code> : Đổi ngôn ngữ (Tiếng Việt / English)\n"
-                    "• <code>.lastfm &lt;username&gt;</code> : Kết nối tài khoản Last.fm nghe nhạc\n"
-                    "• <code>.music</code> : Xem bài hát đang nghe trên Last.fm\n"
+                    "• <code>.nameformat &lt;mẫu&gt;</code> : Đổi định dạng tên\n"
+                    "• <code>.bio &lt;mẫu&gt;</code> : Đổi định dạng bio\n"
+                    "• <code>.preview</code> : Xem trước Tên và Bio\n"
+                    "• <code>.weather</code> : Chi tiết thời tiết hiện tại\n"
+                    "• <code>.music</code> : Bài hát đang nghe trên Last.fm\n"
                     "• <code>.city &lt;thành phố&gt;</code> : Đổi thành phố thời tiết\n"
-                    "• <code>.update</code> : Kích hoạt cập nhật profile ngay lập tức\n"
-                    "• <code>.status</code> : Xem trạng thái cập nhật\n"
-                    "• <code>.pause</code> / <code>.resume</code> : Tạm dừng hoặc tiếp tục\n"
-                    "• <code>.help</code> : Hiển thị bảng trợ giúp này\n\n"
-                    "<b>Từ khóa thời tiết:</b> <code>{weather}</code>, <code>{weather_short}</code>, <code>{temp}</code>, <code>{feels_like}</code>, <code>{humidity}</code>, <code>{wind}</code>, <code>{weather_desc}</code>\n"
-                    "<b>Từ khóa âm nhạc:</b> <code>{music}</code>, <code>{music_or_weather}</code>, <code>{track}</code>, <code>{artist}</code>"
+                    "• <code>.update</code> : Kích hoạt cập nhật profile ngay\n"
+                    "• <code>.status</code> : Xem trạng thái updater\n"
+                    "• <code>.pause</code> / <code>.resume</code> : Tạm dừng / Tiếp tục\n"
+                    "• <code>.lang &lt;vi|en&gt;</code> : Đổi ngôn ngữ (Tiếng Việt / English)\n\n"
+                    "<b>[⚙️ Công cụ & Chẩn đoán]</b>\n"
+                    "• <code>.ping</code> : Kiểm tra độ trễ phản hồi\n"
+                    "• <code>.alive</code> : Kiểm tra thời gian chạy & cấu hình\n"
+                    "• <code>.id</code> : Lấy ID chat, tin nhắn, người dùng\n"
+                    "• <code>.info &lt;reply/user&gt;</code> : Xem thông tin hồ sơ & DC\n"
+                    "• <code>.leave</code> : Rời khỏi nhóm hoặc kênh\n"
+                    "• <code>.block</code> / <code>.unblock</code> : Chặn / bỏ chặn tin nhắn\n\n"
+                    "<b>[🛡️ Quản trị viên (Admin)]</b>\n"
+                    "• <code>.del</code> : Xóa tin nhắn được reply\n"
+                    "• <code>.pin</code> / <code>.unpin</code> : Ghim / bỏ ghim tin nhắn\n"
+                    "• <code>.ban</code> / <code>.unban</code> : Cấm / bỏ cấm thành viên\n"
+                    "• <code>.kick</code> : Trục xuất thành viên khỏi nhóm\n"
+                    "• <code>.mute</code> / <code>.unmute</code> : Tắt tiếng / bật tiếng\n\n"
+                    "<b>[🌐 Tiện ích & Giải trí]</b>\n"
+                    "• <code>.tr &lt;mã_nn&gt; &lt;văn bản/reply&gt;</code> : Dịch thuật nhanh\n"
+                    "• <code>.cash &lt;tiền&gt; &lt;từ&gt; &lt;sang&gt;</code> : Chuyển đổi tỷ giá ngoại tệ\n"
+                    "• <code>.wiki &lt;từ khóa&gt;</code> : Tra cứu bách khoa toàn thư Wikipedia\n"
+                    "• <code>.makeqr &lt;link/văn bản&gt;</code> : Tạo mã QR trực tiếp\n"
+                    "• <code>.neofetch</code> : Cấu hình phần cứng máy chủ & OS\n"
+                    "• <code>.joke</code> / <code>.cowsay</code> / <code>.decide</code> : Lệnh giải trí\n"
+                    "━━━━━━━━━━━━━━━━━━━━━"
                 )
             await event.edit(help_text, parse_mode="html")
 
