@@ -70,6 +70,19 @@ func (b *Bot) Reply(ctx context.Context, msg *Message, text string, delIn time.D
 					}
 				}
 			}
+		case *tg.UpdatesCombined:
+			for _, update := range u.Updates {
+				switch m := update.(type) {
+				case *tg.UpdateNewMessage:
+					if newMsg, ok := m.Message.(*tg.Message); ok {
+						sentMsgID = newMsg.ID
+					}
+				case *tg.UpdateNewChannelMessage:
+					if newMsg, ok := m.Message.(*tg.Message); ok {
+						sentMsgID = newMsg.ID
+					}
+				}
+			}
 		case *tg.UpdateShortSentMessage:
 			sentMsgID = u.ID
 		case *tg.UpdateShortMessage:

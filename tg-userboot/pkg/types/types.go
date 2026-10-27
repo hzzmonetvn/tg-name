@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/gotd/td/telegram"
@@ -46,11 +47,12 @@ type Message struct {
 	Input          string
 	Args           []string
 	Flags          map[string]bool
-	ReplyToMsgID   int
-	ReplyToUserID  int64
-	ReplyToText    string
-	Peer           tg.InputPeerClass
-	RawMessage     tg.MessageClass
+	ReplyToMsgID          int
+	ReplyToUserID         int64
+	ReplyToUserAccessHash int64
+	ReplyToText           string
+	Peer                  tg.InputPeerClass
+	RawMessage            tg.MessageClass
 }
 
 // HandlerFunc is the signature for plugin command handlers
@@ -77,4 +79,74 @@ type Bot struct {
 	Self     *tg.User
 	Commands map[string]*Command
 	Start    time.Time
+
+	entityMu sync.RWMutex
+	Users    map[int64]int64 // userID -> accessHash
+	Channels map[int64]int64 // channelID -> accessHash
+}
+
+// CacheEntities stores access hashes for users and channels
+func (b *Bot) CacheEntities(users []tg.UserClass, chats []tg.ChatClass) {
+	b.entityMu.Lock()
+	defer b.entityMu.Unlock()
+	if b.Users == nil {
+		b.Users = make(map[int64]int64)
+	}
+	if b.Channels == nil {
+		b.Channels = make(map[int64]int64)
+	}
+	for _, u := range users {
+		if user, ok := u.(*tg.User); ok && user.AccessHash != 0 {
+			b.Users[user.ID] = user.AccessHash
+		}
+	}
+	for _, c := range chats {
+		if ch, ok := c.(*tg.Channel); ok && ch.AccessHash != 0 {
+			b.Channels[ch.ID] = ch.AccessHash
+		}
+	}
+}
+
+// GetUserAccessHash returns the cached access hash for a user
+func (b *Bot) GetUserAccessHash(userID int64) int64 {
+	b.entityMu.RLock()
+	defer b.entityMu.RUnlock()
+	if b.Users == nil {
+		return 0
+	}
+	return b.Users[userID]
+}
+
+// GetChannelAccessHash returns the cached access hash for a channel
+func (b *Bot) GetChannelAccessHash(channelID int64) int64 {
+	b.entityMu.RLock()
+	defer b.entityMu.RUnlock()
+	if b.Channels == nil {
+		return 0
+	}
+	return b.Channels[channelID]
+}
+
+// GetInputUser returns an InputUser with cached AccessHash
+func (b *Bot) GetInputUser(userID int64) tg.InputUserClass {
+	return &tg.InputUser{
+		UserID:     userID,
+		AccessHash: b.GetUserAccessHash(userID),
+	}
+}
+
+// GetInputPeerUser returns an InputPeerUser with cached AccessHash
+func (b *Bot) GetInputPeerUser(userID int64) tg.InputPeerClass {
+	return &tg.InputPeerUser{
+		UserID:     userID,
+		AccessHash: b.GetUserAccessHash(userID),
+	}
+}
+
+// GetInputChannel returns an InputChannel with cached AccessHash
+func (b *Bot) GetInputChannel(channelID int64) *tg.InputChannel {
+	return &tg.InputChannel{
+		ChannelID:  channelID,
+		AccessHash: b.GetChannelAccessHash(channelID),
+	}
 }

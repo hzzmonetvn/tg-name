@@ -18,10 +18,6 @@ type Dispatcher struct {
 	commands map[string]*types.Command
 	aliases  map[string]string
 	bot      *types.Bot
-
-	entityMu sync.RWMutex
-	users    map[int64]int64 // userID -> accessHash
-	channels map[int64]int64 // channelID -> accessHash
 }
 
 // NewDispatcher creates a new Dispatcher instance
@@ -30,8 +26,6 @@ func NewDispatcher(b *types.Bot) *Dispatcher {
 		commands: make(map[string]*types.Command),
 		aliases:  make(map[string]string),
 		bot:      b,
-		users:    make(map[int64]int64),
-		channels: make(map[int64]int64),
 	}
 	b.Commands = d.commands
 	return d
@@ -39,34 +33,17 @@ func NewDispatcher(b *types.Bot) *Dispatcher {
 
 // CacheEntities caches users and channels access hashes from Telegram updates
 func (d *Dispatcher) CacheEntities(users []tg.UserClass, chats []tg.ChatClass) {
-	d.entityMu.Lock()
-	defer d.entityMu.Unlock()
-
-	for _, u := range users {
-		if user, ok := u.(*tg.User); ok && user.AccessHash != 0 {
-			d.users[user.ID] = user.AccessHash
-		}
-	}
-
-	for _, c := range chats {
-		if ch, ok := c.(*tg.Channel); ok && ch.AccessHash != 0 {
-			d.channels[ch.ID] = ch.AccessHash
-		}
-	}
+	d.bot.CacheEntities(users, chats)
 }
 
 // GetUserAccessHash retrieves the cached access hash for a user
 func (d *Dispatcher) GetUserAccessHash(userID int64) int64 {
-	d.entityMu.RLock()
-	defer d.entityMu.RUnlock()
-	return d.users[userID]
+	return d.bot.GetUserAccessHash(userID)
 }
 
 // GetChannelAccessHash retrieves the cached access hash for a channel
 func (d *Dispatcher) GetChannelAccessHash(channelID int64) int64 {
-	d.entityMu.RLock()
-	defer d.entityMu.RUnlock()
-	return d.channels[channelID]
+	return d.bot.GetChannelAccessHash(channelID)
 }
 
 // Register registers a command and its aliases
@@ -240,6 +217,7 @@ func (d *Dispatcher) ProcessMessage(ctx context.Context, raw *tg.Message) error 
 
 	replyToMsgID := 0
 	var replyToUserID int64
+	var replyToUserAccessHash int64
 	var replyToText string
 
 	if raw.ReplyTo != nil {
@@ -259,11 +237,15 @@ func (d *Dispatcher) ProcessMessage(ctx context.Context, raw *tg.Message) error 
 			})
 			if err == nil {
 				messageList = extractMessageList(msgs)
+				uList, cList := extractUsersAndChats(msgs)
+				d.bot.CacheEntities(uList, cList)
 			}
 		} else {
 			msgs, err := d.bot.API.MessagesGetMessages(fetchCtx, []tg.InputMessageClass{&tg.InputMessageID{ID: replyToMsgID}})
 			if err == nil {
 				messageList = extractMessageList(msgs)
+				uList, cList := extractUsersAndChats(msgs)
+				d.bot.CacheEntities(uList, cList)
 			}
 		}
 		cancel()
@@ -274,6 +256,7 @@ func (d *Dispatcher) ProcessMessage(ctx context.Context, raw *tg.Message) error 
 				if fromUser, ok := msgObj.GetFromID(); ok {
 					if u, ok := fromUser.(*tg.PeerUser); ok {
 						replyToUserID = u.UserID
+						replyToUserAccessHash = d.bot.GetUserAccessHash(u.UserID)
 					}
 				}
 				break
@@ -282,21 +265,22 @@ func (d *Dispatcher) ProcessMessage(ctx context.Context, raw *tg.Message) error 
 	}
 
 	wrappedMsg := &types.Message{
-		ID:            raw.ID,
-		SenderID:      senderID,
-		IsOutgoing:    raw.Out,
-		Text:          text,
-		RawText:       raw.Message,
-		Trigger:       trigger,
-		Cmd:           cmdName,
-		Input:         input,
-		Args:          cleanArgs,
-		Flags:         flags,
-		ReplyToMsgID:  replyToMsgID,
-		ReplyToUserID: replyToUserID,
-		ReplyToText:   replyToText,
-		Peer:          inputPeer,
-		RawMessage:    raw,
+		ID:                    raw.ID,
+		SenderID:              senderID,
+		IsOutgoing:            raw.Out,
+		Text:                  text,
+		RawText:               raw.Message,
+		Trigger:               trigger,
+		Cmd:                   cmdName,
+		Input:                 input,
+		Args:                  cleanArgs,
+		Flags:                 flags,
+		ReplyToMsgID:          replyToMsgID,
+		ReplyToUserID:         replyToUserID,
+		ReplyToUserAccessHash: replyToUserAccessHash,
+		ReplyToText:           replyToText,
+		Peer:                  inputPeer,
+		RawMessage:            raw,
 	}
 
 	// Execute command safely in a detached context with recover to avoid caller cancellation
@@ -346,4 +330,16 @@ func extractMessageList(m tg.MessagesMessagesClass) []tg.MessageClass {
 		return msgBox.Messages
 	}
 	return nil
+}
+
+func extractUsersAndChats(m tg.MessagesMessagesClass) ([]tg.UserClass, []tg.ChatClass) {
+	switch msgBox := m.(type) {
+	case *tg.MessagesMessages:
+		return msgBox.Users, msgBox.Chats
+	case *tg.MessagesMessagesSlice:
+		return msgBox.Users, msgBox.Chats
+	case *tg.MessagesChannelMessages:
+		return msgBox.Users, msgBox.Chats
+	}
+	return nil, nil
 }

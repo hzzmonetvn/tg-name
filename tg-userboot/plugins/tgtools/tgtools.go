@@ -160,7 +160,7 @@ func handleInfo(ctx context.Context, b *types.Bot, msg *types.Message) error {
 		return b.Respond(ctx, msg, "❌ <i>Please reply to a user or provide user ID/username.</i>", 5*time.Second)
 	}
 
-	users, err := b.API.UsersGetUsers(ctx, []tg.InputUserClass{&tg.InputUser{UserID: targetID}})
+	users, err := b.API.UsersGetUsers(ctx, []tg.InputUserClass{b.GetInputUser(targetID)})
 	if err != nil || len(users) == 0 {
 		return b.Respond(ctx, msg, fmt.Sprintf("❌ Could not fetch user: %v", err), 5*time.Second)
 	}
@@ -207,7 +207,8 @@ func handleLeave(ctx context.Context, b *types.Bot, msg *types.Message) error {
 	switch p := msg.Peer.(type) {
 	case *tg.InputPeerChannel:
 		_, err := b.API.ChannelsLeaveChannel(ctx, &tg.InputChannel{
-			ChannelID: p.ChannelID,
+			ChannelID:  p.ChannelID,
+			AccessHash: p.AccessHash,
 		})
 		return err
 	case *tg.InputPeerChat:
@@ -228,7 +229,7 @@ func handleBlock(ctx context.Context, b *types.Bot, msg *types.Message) error {
 	}
 
 	_, err = b.API.ContactsBlock(ctx, &tg.ContactsBlockRequest{
-		ID: &tg.InputPeerUser{UserID: targetID},
+		ID: b.GetInputPeerUser(targetID),
 	})
 	if err != nil {
 		return err
@@ -243,7 +244,7 @@ func handleUnblock(ctx context.Context, b *types.Bot, msg *types.Message) error 
 	}
 
 	_, err = b.API.ContactsUnblock(ctx, &tg.ContactsUnblockRequest{
-		ID: &tg.InputPeerUser{UserID: targetID},
+		ID: b.GetInputPeerUser(targetID),
 	})
 	if err != nil {
 		return err

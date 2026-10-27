@@ -100,8 +100,8 @@ func handleBan(ctx context.Context, b *types.Bot, msg *types.Message) error {
 	}
 
 	_, err = b.API.ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{
-		Channel: &tg.InputChannel{ChannelID: ch.ChannelID},
-		Participant: &tg.InputPeerUser{UserID: targetID},
+		Channel:     &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+		Participant: b.GetInputPeerUser(targetID),
 		BannedRights: tg.ChatBannedRights{
 			ViewMessages: true,
 			SendMessages: true,
@@ -133,8 +133,8 @@ func handleUnban(ctx context.Context, b *types.Bot, msg *types.Message) error {
 	}
 
 	_, err = b.API.ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{
-		Channel:      &tg.InputChannel{ChannelID: ch.ChannelID},
-		Participant:  &tg.InputPeerUser{UserID: targetID},
+		Channel:      &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+		Participant:  b.GetInputPeerUser(targetID),
 		BannedRights: tg.ChatBannedRights{},
 	})
 	if err != nil {
@@ -157,8 +157,8 @@ func handleKick(ctx context.Context, b *types.Bot, msg *types.Message) error {
 
 	// Kick by temporarily banning and then lifting the ban
 	_, err = b.API.ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{
-		Channel: &tg.InputChannel{ChannelID: ch.ChannelID},
-		Participant: &tg.InputPeerUser{UserID: targetID},
+		Channel:     &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+		Participant: b.GetInputPeerUser(targetID),
 		BannedRights: tg.ChatBannedRights{
 			ViewMessages: true,
 			UntilDate:    int(time.Now().Add(60 * time.Second).Unix()),
@@ -183,8 +183,8 @@ func handleMute(ctx context.Context, b *types.Bot, msg *types.Message) error {
 	}
 
 	_, err = b.API.ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{
-		Channel: &tg.InputChannel{ChannelID: ch.ChannelID},
-		Participant: &tg.InputPeerUser{UserID: targetID},
+		Channel:     &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+		Participant: b.GetInputPeerUser(targetID),
 		BannedRights: tg.ChatBannedRights{
 			SendMessages: true,
 			SendMedia:    true,
@@ -215,8 +215,8 @@ func handleUnmute(ctx context.Context, b *types.Bot, msg *types.Message) error {
 	}
 
 	_, err = b.API.ChannelsEditBanned(ctx, &tg.ChannelsEditBannedRequest{
-		Channel:      &tg.InputChannel{ChannelID: ch.ChannelID},
-		Participant:  &tg.InputPeerUser{UserID: targetID},
+		Channel:      &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+		Participant:  b.GetInputPeerUser(targetID),
 		BannedRights: tg.ChatBannedRights{},
 	})
 	if err != nil {
