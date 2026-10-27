@@ -18,6 +18,10 @@ type Dispatcher struct {
 	commands map[string]*types.Command
 	aliases  map[string]string
 	bot      *types.Bot
+
+	entityMu sync.RWMutex
+	users    map[int64]int64 // userID -> accessHash
+	channels map[int64]int64 // channelID -> accessHash
 }
 
 // NewDispatcher creates a new Dispatcher instance
@@ -26,9 +30,43 @@ func NewDispatcher(b *types.Bot) *Dispatcher {
 		commands: make(map[string]*types.Command),
 		aliases:  make(map[string]string),
 		bot:      b,
+		users:    make(map[int64]int64),
+		channels: make(map[int64]int64),
 	}
 	b.Commands = d.commands
 	return d
+}
+
+// CacheEntities caches users and channels access hashes from Telegram updates
+func (d *Dispatcher) CacheEntities(users []tg.UserClass, chats []tg.ChatClass) {
+	d.entityMu.Lock()
+	defer d.entityMu.Unlock()
+
+	for _, u := range users {
+		if user, ok := u.(*tg.User); ok && user.AccessHash != 0 {
+			d.users[user.ID] = user.AccessHash
+		}
+	}
+
+	for _, c := range chats {
+		if ch, ok := c.(*tg.Channel); ok && ch.AccessHash != 0 {
+			d.channels[ch.ID] = ch.AccessHash
+		}
+	}
+}
+
+// GetUserAccessHash retrieves the cached access hash for a user
+func (d *Dispatcher) GetUserAccessHash(userID int64) int64 {
+	d.entityMu.RLock()
+	defer d.entityMu.RUnlock()
+	return d.users[userID]
+}
+
+// GetChannelAccessHash retrieves the cached access hash for a channel
+func (d *Dispatcher) GetChannelAccessHash(channelID int64) int64 {
+	d.entityMu.RLock()
+	defer d.entityMu.RUnlock()
+	return d.channels[channelID]
 }
 
 // Register registers a command and its aliases
@@ -42,6 +80,25 @@ func (d *Dispatcher) Register(cmd *types.Command) {
 	for _, alias := range cmd.Aliases {
 		d.aliases[strings.ToLower(alias)] = name
 	}
+}
+
+// HandleUpdates handles bulk Telegram updates, caches entities, and dispatches messages
+func (d *Dispatcher) HandleUpdates(ctx context.Context, u tg.UpdatesClass) error {
+	switch updates := u.(type) {
+	case *tg.Updates:
+		d.CacheEntities(updates.Users, updates.Chats)
+		for _, up := range updates.Updates {
+			_ = d.HandleUpdate(ctx, up)
+		}
+	case *tg.UpdatesCombined:
+		d.CacheEntities(updates.Users, updates.Chats)
+		for _, up := range updates.Updates {
+			_ = d.HandleUpdate(ctx, up)
+		}
+	case *tg.UpdateShort:
+		_ = d.HandleUpdate(ctx, updates.Update)
+	}
+	return nil
 }
 
 // HandleUpdate handles raw updates from Telegram MTProto
@@ -167,53 +224,96 @@ func (d *Dispatcher) ProcessMessage(ctx context.Context, raw *tg.Message) error 
 		return nil
 	}
 
-	// Resolve Peer
+	// Resolve Peer with cached AccessHash
 	peer := raw.GetPeerID()
 	var inputPeer tg.InputPeerClass
 	switch p := peer.(type) {
 	case *tg.PeerUser:
-		inputPeer = &tg.InputPeerUser{UserID: p.UserID}
+		accessHash := d.GetUserAccessHash(p.UserID)
+		inputPeer = &tg.InputPeerUser{UserID: p.UserID, AccessHash: accessHash}
 	case *tg.PeerChat:
 		inputPeer = &tg.InputPeerChat{ChatID: p.ChatID}
 	case *tg.PeerChannel:
-		inputPeer = &tg.InputPeerChannel{ChannelID: p.ChannelID}
+		accessHash := d.GetChannelAccessHash(p.ChannelID)
+		inputPeer = &tg.InputPeerChannel{ChannelID: p.ChannelID, AccessHash: accessHash}
 	}
 
 	replyToMsgID := 0
+	var replyToUserID int64
+	var replyToText string
+
 	if raw.ReplyTo != nil {
 		if replyHeader, ok := raw.ReplyTo.(*tg.MessageReplyHeader); ok {
 			replyToMsgID = replyHeader.ReplyToMsgID
 		}
 	}
 
-	wrappedMsg := &types.Message{
-		ID:           raw.ID,
-		SenderID:     senderID,
-		IsOutgoing:   raw.Out,
-		Text:         text,
-		RawText:      raw.Message,
-		Trigger:      trigger,
-		Cmd:          cmdName,
-		Input:        input,
-		Args:         cleanArgs,
-		Flags:        flags,
-		ReplyToMsgID: replyToMsgID,
-		Peer:         inputPeer,
-		RawMessage:   raw,
+	// If message is a reply and API is available, resolve replied message content and sender
+	if replyToMsgID != 0 && d.bot.API != nil && inputPeer != nil {
+		fetchCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		var messageList []tg.MessageClass
+		if ch, ok := inputPeer.(*tg.InputPeerChannel); ok {
+			msgs, err := d.bot.API.ChannelsGetMessages(fetchCtx, &tg.ChannelsGetMessagesRequest{
+				Channel: &tg.InputChannel{ChannelID: ch.ChannelID, AccessHash: ch.AccessHash},
+				ID:      []tg.InputMessageClass{&tg.InputMessageID{ID: replyToMsgID}},
+			})
+			if err == nil {
+				messageList = extractMessageList(msgs)
+			}
+		} else {
+			msgs, err := d.bot.API.MessagesGetMessages(fetchCtx, []tg.InputMessageClass{&tg.InputMessageID{ID: replyToMsgID}})
+			if err == nil {
+				messageList = extractMessageList(msgs)
+			}
+		}
+		cancel()
+
+		for _, m := range messageList {
+			if msgObj, ok := m.(*tg.Message); ok {
+				replyToText = msgObj.Message
+				if fromUser, ok := msgObj.GetFromID(); ok {
+					if u, ok := fromUser.(*tg.PeerUser); ok {
+						replyToUserID = u.UserID
+					}
+				}
+				break
+			}
+		}
 	}
 
-	// Execute command safely with recover
+	wrappedMsg := &types.Message{
+		ID:            raw.ID,
+		SenderID:      senderID,
+		IsOutgoing:    raw.Out,
+		Text:          text,
+		RawText:       raw.Message,
+		Trigger:       trigger,
+		Cmd:           cmdName,
+		Input:         input,
+		Args:          cleanArgs,
+		Flags:         flags,
+		ReplyToMsgID:  replyToMsgID,
+		ReplyToUserID: replyToUserID,
+		ReplyToText:   replyToText,
+		Peer:          inputPeer,
+		RawMessage:    raw,
+	}
+
+	// Execute command safely in a detached context with recover to avoid caller cancellation
 	go func() {
+		execCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+
 		defer func() {
 			if r := recover(); r != nil {
 				log.Printf("[PANIC] in command %s: %v", cmdName, r)
-				_ = d.bot.Respond(ctx, wrappedMsg, fmt.Sprintf("⚠️ <b>Internal Error</b> in <code>%s</code>: %v", cmdName, r), 10*time.Second)
+				_ = d.bot.Respond(execCtx, wrappedMsg, fmt.Sprintf("⚠️ <b>Internal Error</b> in <code>%s</code>: %v", cmdName, r), 10*time.Second)
 			}
 		}()
 
-		if err := cmd.Handler(ctx, d.bot, wrappedMsg); err != nil {
+		if err := cmd.Handler(execCtx, d.bot, wrappedMsg); err != nil {
 			log.Printf("[ERROR] Command %s failed: %v", cmdName, err)
-			_ = d.bot.Respond(ctx, wrappedMsg, fmt.Sprintf("❌ <b>Error:</b> %v", err), 10*time.Second)
+			_ = d.bot.Respond(execCtx, wrappedMsg, fmt.Sprintf("❌ <b>Error:</b> %v", err), 10*time.Second)
 		}
 	}()
 
@@ -234,4 +334,16 @@ func isNumber(s string) bool {
 		}
 	}
 	return len(s) > start
+}
+
+func extractMessageList(m tg.MessagesMessagesClass) []tg.MessageClass {
+	switch msgBox := m.(type) {
+	case *tg.MessagesMessages:
+		return msgBox.Messages
+	case *tg.MessagesMessagesSlice:
+		return msgBox.Messages
+	case *tg.MessagesChannelMessages:
+		return msgBox.Messages
+	}
+	return nil
 }

@@ -18,7 +18,7 @@ import asyncio
 import argparse
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from dotenv import load_dotenv
 from telethon import TelegramClient, errors, types
@@ -37,10 +37,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(BASE_DIR, ".env"))
 
 
-def normalize_channel_id(channel_input) -> int:
-    """Chuyển đổi channel ID dạng chuỗi hoặc số thành ID kênh hợp lệ (-100...)"""
+def normalize_channel_id(channel_input) -> Union[int, str]:
+    """Chuyển đổi channel ID dạng chuỗi hoặc số thành ID kênh hợp lệ (-100...) hoặc username (@...)"""
     s = str(channel_input).strip()
-    if s.startswith("-100"):
+    if s.startswith("@"):
+        return s
+    elif s.startswith("-100"):
         return int(s)
     elif s.startswith("-"):
         return int(s)
@@ -50,14 +52,16 @@ def normalize_channel_id(channel_input) -> int:
         try:
             return int(s)
         except ValueError:
+            if s.replace("_", "").isalnum():
+                return f"@{s}"
             raise ValueError(f"ID kênh không hợp lệ: {channel_input}")
 
 
 class ChannelForwarder:
     def __init__(
         self,
-        src_channel_id: int,
-        dst_channel_id: int,
+        src_channel_id: Union[int, str],
+        dst_channel_id: Union[int, str],
         delay: float = 2.5,
         mode: str = "files_and_videos",
         silent: bool = True,
@@ -78,9 +82,11 @@ class ChannelForwarder:
         self.limit = limit
         self.dry_run = dry_run
 
+        safe_src = str(self.src_channel_id).replace("-", "").replace("@", "")
+        safe_dst = str(self.dst_channel_id).replace("-", "").replace("@", "")
         self.progress_file = os.path.join(
             BASE_DIR,
-            f"forward_progress_{abs(self.src_channel_id)}_to_{abs(self.dst_channel_id)}.json",
+            f"forward_progress_{safe_src}_to_{safe_dst}.json",
         )
 
         self.client: Optional[TelegramClient] = None
@@ -265,6 +271,8 @@ class ChannelForwarder:
 
             # Kiểm tra xem album này có chứa file/video cần forward không
             has_target_content = any(self.is_target_message(m) for m in current_album)
+            should_advance = False
+
             if has_target_content:
                 if self.mode == "strict_files_only":
                     items_to_send = [m for m in current_album if self.is_target_message(m)]
@@ -276,15 +284,24 @@ class ChannelForwarder:
                     ok = await self.forward_batch(items_to_send)
                     if ok:
                         count_handled += 1
+                        should_advance = True
                         await asyncio.sleep(self.delay)
+                    else:
+                        logger.warning(
+                            f"⚠️ Không thể forward album ID {current_album_id}, không cập nhật checkpoint để retry khi chạy lại."
+                        )
+                else:
+                    should_advance = True
             else:
                 self.total_skipped += len(current_album)
+                should_advance = True
 
-            # Cập nhật ID quét lớn nhất trong album
-            max_id_in_album = max(m.id for m in current_album)
-            if max_id_in_album > self.last_scanned_id:
-                self.last_scanned_id = max_id_in_album
-                self.save_progress()
+            # Cập nhật ID quét lớn nhất trong album nếu xử lý thành công
+            if should_advance:
+                max_id_in_album = max(m.id for m in current_album)
+                if max_id_in_album > self.last_scanned_id:
+                    self.last_scanned_id = max_id_in_album
+                    self.save_progress()
 
             current_album = []
             current_album_id = None

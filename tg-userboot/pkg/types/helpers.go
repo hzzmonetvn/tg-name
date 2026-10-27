@@ -55,11 +55,37 @@ func (b *Bot) Reply(ctx context.Context, msg *Message, text string, delIn time.D
 	}
 
 	if delIn > 0 {
-		// Asynchronous delete helper
-		go func() {
-			time.Sleep(delIn)
-			// best effort deletion of sent message
-		}()
+		var sentMsgID int
+		switch u := updates.(type) {
+		case *tg.Updates:
+			for _, update := range u.Updates {
+				switch m := update.(type) {
+				case *tg.UpdateNewMessage:
+					if newMsg, ok := m.Message.(*tg.Message); ok {
+						sentMsgID = newMsg.ID
+					}
+				case *tg.UpdateNewChannelMessage:
+					if newMsg, ok := m.Message.(*tg.Message); ok {
+						sentMsgID = newMsg.ID
+					}
+				}
+			}
+		case *tg.UpdateShortSentMessage:
+			sentMsgID = u.ID
+		case *tg.UpdateShortMessage:
+			sentMsgID = u.ID
+		}
+
+		if sentMsgID > 0 {
+			toDel := &Message{
+				ID:   sentMsgID,
+				Peer: msg.Peer,
+			}
+			go func() {
+				time.Sleep(delIn)
+				_ = b.Delete(context.Background(), toDel)
+			}()
+		}
 	}
 	return &updates, nil
 }
@@ -73,11 +99,23 @@ func (b *Bot) Respond(ctx context.Context, msg *Message, text string, delIn time
 	return err
 }
 
-// Delete removes the message from the chat
+// Delete removes the message from the chat (channel and private chat aware)
 func (b *Bot) Delete(ctx context.Context, msg *Message) error {
 	if msg.Peer == nil {
 		return fmt.Errorf("peer is nil")
 	}
+
+	if ch, ok := msg.Peer.(*tg.InputPeerChannel); ok {
+		_, err := b.API.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  ch.ChannelID,
+				AccessHash: ch.AccessHash,
+			},
+			ID: []int{msg.ID},
+		})
+		return err
+	}
+
 	_, err := b.API.MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
 		Revoke: true,
 		ID:     []int{msg.ID},

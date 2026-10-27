@@ -487,6 +487,11 @@ class ProfileEngine:
                 if not await asyncio.wait_for(self.user_client.is_user_authorized(), timeout=10):
                     state.last_error = "Phiên đăng nhập không hợp lệ hoặc đã hết hạn"
                     print("[❌] Userbot: Phiên đăng nhập không hợp lệ hoặc đã hết hạn.")
+                    try:
+                        await self.user_client.disconnect()
+                    except Exception:
+                        pass
+                    self.user_client = None
                     return False
                 if need_register:
                     try:
@@ -549,6 +554,12 @@ class ProfileEngine:
         except Exception as e:
             self.is_running = False
             state.is_running = False
+            if self.user_client:
+                try:
+                    await self.user_client.disconnect()
+                except Exception:
+                    pass
+                self.user_client = None
             print(f"[❌] Lỗi khởi động Profile Updater: {e}")
             return False, f"Lỗi khởi động: {e}"
 

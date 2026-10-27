@@ -236,6 +236,17 @@ func handleDel(ctx context.Context, b *types.Bot, msg *types.Message) error {
 		targetIDs = append(targetIDs, msg.ID)
 	}
 
+	if ch, ok := msg.Peer.(*tg.InputPeerChannel); ok {
+		_, err := b.API.ChannelsDeleteMessages(ctx, &tg.ChannelsDeleteMessagesRequest{
+			Channel: &tg.InputChannel{
+				ChannelID:  ch.ChannelID,
+				AccessHash: ch.AccessHash,
+			},
+			ID: targetIDs,
+		})
+		return err
+	}
+
 	_, err := b.API.MessagesDeleteMessages(ctx, &tg.MessagesDeleteMessagesRequest{
 		Revoke: true,
 		ID:     targetIDs,

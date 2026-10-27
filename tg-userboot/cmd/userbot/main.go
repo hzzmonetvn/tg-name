@@ -72,19 +72,7 @@ func main() {
 	client := telegram.NewClient(cfg.AppID, cfg.AppHash, telegram.Options{
 		SessionStorage: sessionStorage,
 		UpdateHandler: telegram.UpdateHandlerFunc(func(ctx context.Context, u tg.UpdatesClass) error {
-			switch updates := u.(type) {
-			case *tg.Updates:
-				for _, up := range updates.Updates {
-					_ = disp.HandleUpdate(ctx, up)
-				}
-			case *tg.UpdatesCombined:
-				for _, up := range updates.Updates {
-					_ = disp.HandleUpdate(ctx, up)
-				}
-			case *tg.UpdateShort:
-				_ = disp.HandleUpdate(ctx, updates.Update)
-			}
-			return nil
+			return disp.HandleUpdates(ctx, u)
 		}),
 	})
 

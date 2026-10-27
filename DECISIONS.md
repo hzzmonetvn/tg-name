@@ -102,4 +102,18 @@ Author: **hzzmonetvn**
   2. *Translation API*: Google Translate GTX endpoint (`translate.googleapis.com`) returned HTTP 429 (Too Many Requests) due to datacenter IP blocking. Upgraded to a dual-layer architecture: primary translation via MyMemory API (`api.mymemory.translated.net`) with Google fallback.
 - **Why**: Proactive endpoint verification ensures zero silent failures or broken commands when deployed to production servers.
 
+---
+
+## 11. MTProto Peer AccessHash Caching, Execution Contexts & Channel-Aware Deletions
+
+- **Decision**:
+  1. *Peer AccessHash Caching*: Maintain an in-memory `EntityCache` in `pkg/dispatcher` that dynamically extracts and stores `AccessHash` values for users and channels from incoming MTProto `Updates` / `UpdatesCombined`. When creating `InputPeerUser` or `InputPeerChannel`, access hashes are retrieved to prevent MTProto `CHANNEL_INVALID` or `PEER_ID_INVALID` RPC errors.
+  2. *Detached Execution Context*: Run command handler Goroutines with a detached context with a 2-minute deadline (`context.WithTimeout(context.Background(), 2*time.Minute)`) rather than inheriting the short-lived update handler context, ensuring long-running AI queries or external RPCs are not prematurely aborted.
+  3. *Channel-Aware Deletion*: Distinguish between basic chats / user dialogs (`MessagesDeleteMessages`) and supergroups / channels (`ChannelsDeleteMessages`) in `types.Bot.Delete()` and `plugins/admin/handleDel`.
+  4. *Automatic Replied Message Resolution*: When a command is triggered in reply to a message, automatically fetch and populate `ReplyToUserID` and `ReplyToText` so plugins (`.ai`, `.tr`, `.ban`, `.info`) immediately possess target text and user context.
+  5. *Fail-Safe Session Reconnect*: In `profile_engine.py`, explicitly disconnect and reset `self.user_client = None` if authorization verification fails, preventing infinite loops on revoked sessions.
+  6. *Reliable Album Resumption*: In `forward_channel.py`, advance `last_scanned_id` checkpoints only upon confirmed delivery of media albums, ensuring failed batches are automatically retried upon resumption.
+- **Why**: Eliminates edge-case runtime failures and ensures production-grade reliability across both the Go MTProto userbot and Python profile engine.
+
+
 
