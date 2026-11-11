@@ -122,5 +122,36 @@ Author: **hzzmonetvn**
   6. *Reliable Album Resumption*: In `forward_channel.py`, advance `last_scanned_id` checkpoints only upon confirmed delivery of media albums, ensuring failed batches are automatically retried upon resumption.
 - **Why**: Eliminates edge-case runtime failures and ensures production-grade reliability across both the Go MTProto userbot and Python profile engine.
 
+---
+
+## 14. AFK/Presence Controller, Target Ping, Domain Intelligence, and Async Speedtest
+
+- **Decision**: Implement four integrated diagnostic and presence subsystems into `plain_plugins.py`:
+  1. *AFK / Presence Controller (`.off`, `.on`)*:
+     - In-memory state tracking (`AFK_STATE`) recording offline status, reason, start timestamp, and a per-sender response cooldown dictionary.
+     - Automatically intercepts incoming private messages (`event.is_private`) and group mentions (`event.mentioned`).
+     - Employs a 60-second debounce per sender to eliminate reply spam in busy groups or repeated message bursts.
+     - Calculates precise `lastseen` timestamp and elapsed offline duration (`Xh Ym Zs trước`).
+     - Provides contact summary reporting on return (`.on`).
+  2. *Adaptive Target Ping (`.ping [url]`)*:
+     - Preserves low-latency Telegram MTProto roundtrip benchmarking when called without arguments or with `tg`/`telegram`.
+     - When supplied with a URL or IP, normalizes the target address, resolves DNS IP via `getaddrinfo`, and measures HTTP response latency and status codes via `aiohttp` with an automatic fallback to raw TCP port connectivity.
+  3. *Multi-Source Domain Intelligence (`.domain <domain>`, `.whois`)*:
+     - Extracts and normalizes apex domain and TLD.
+     - Concurrently gathers:
+       - Cloudflare DoH (`application/dns-json` via `cloudflare-dns.com`) for `A`, `AAAA`, `NS`, and `MX` records.
+       - Official ICANN RDAP (`rdap.org`) with custom User-Agent to extract registrar, creation date, and expiration date.
+       - Certificate Transparency logs via `https://crt.name/v1/search?apex=<domain>` for comprehensive public subdomain enumeration.
+     - Consolidates results in a structured, clean Telegram HTML report.
+  4. *Non-Blocking Network Speedtest (`.speedtest`, `.speed`)*:
+     - Offloads `speedtest.Speedtest(secure=True)` to a worker thread via `asyncio.get_running_loop().run_in_executor(None, run_speed)`, guaranteeing the Telethon MTProto event loop remains responsive during 15-25s network throughput tests.
+     - Measures download bandwidth, upload bandwidth, jitter/ping, and identifies the target testing server and ISP.
+- **Considered & Rejected**:
+     - *Blocking Speedtest*: Rejected because running synchronous network benchmarking directly in the asyncio loop stalls profile updates and message handling for all concurrent chats.
+     - *Shelling out to system whois CLI*: Rejected because system packages vary across environments (`whois` binary was missing on host), whereas RDAP JSON and DoH are purely self-contained within Python without native OS binary dependencies.
+     - *Unthrottled AFK replies*: Rejected because responding to every single tag or private message in quick succession triggers Telegram FloodWait penalties and spams chat participants.
+- **Why**: Delivers full presence management and diagnostic capabilities with zero impact on core updater performance.
+
+
 
 

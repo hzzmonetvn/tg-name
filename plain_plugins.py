@@ -17,6 +17,7 @@ import base64
 import urllib.parse
 import platform
 import asyncio
+import socket
 from datetime import datetime
 from io import BytesIO
 
@@ -43,6 +44,14 @@ from updater_state import state
 
 
 BOT_START_TIME = time.time()
+
+# Global AFK / Offline state tracking
+AFK_STATE = {
+    "is_afk": False,
+    "reason": "",
+    "time": 0.0,
+    "notified": {},  # {sender_id: timestamp}
+}
 
 
 def get_ai_config():
@@ -259,15 +268,397 @@ def register_plugins(client: TelegramClient):
             await event.edit(f"❌ <b>Lỗi tạo ảnh:</b> {e}", parse_mode="html")
 
     # ============================================================
-    # 2. TGTOOLS & GENERAL DIAGNOSTICS
+    # 2. AFK / PRESENCE (ONLINE & OFFLINE CONTROLLER)
     # ============================================================
-    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(ping|p)$"))
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(off|afk)(?:\s+([\s\S]+))?$"))
+    async def afk_on_handler(event):
+        reason = (event.pattern_match.group(2) or "").strip()
+        if not reason:
+            reason = "Bận / Không có ở đây"
+
+        now = time.time()
+        AFK_STATE["is_afk"] = True
+        AFK_STATE["reason"] = reason
+        AFK_STATE["time"] = now
+        AFK_STATE["notified"].clear()
+
+        time_str = datetime.fromtimestamp(now).strftime("%H:%M:%S (%d/%m/%Y)")
+        msg_text = (
+            f"💤 <b>Chế độ Vắng mặt (AFK) đã BẬT!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 <b>Lý do:</b> <i>{reason}</i>\n"
+            f"🕒 <b>Bắt đầu từ:</b> <code>{time_str}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Bot sẽ tự động trả lời khi có người nhắn tin riêng hoặc tag bạn!</i>\n"
+            f"<i>Gõ <code>.on</code> để tắt chế độ AFK.</i>"
+        )
+        await event.edit(msg_text, parse_mode="html")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(on|unafk)$"))
+    async def afk_off_handler(event):
+        if not AFK_STATE["is_afk"]:
+            await event.edit("⚡ <b>Bạn hiện đang online bình thường!</b>", parse_mode="html")
+            return
+
+        diff = int(time.time() - AFK_STATE["time"])
+        hours, rem = divmod(diff, 3600)
+        mins, secs = divmod(rem, 60)
+        if hours > 0:
+            duration_str = f"{hours}h {mins}m {secs}s"
+        elif mins > 0:
+            duration_str = f"{mins}m {secs}s"
+        else:
+            duration_str = f"{secs}s"
+
+        notified_count = len(AFK_STATE["notified"])
+        AFK_STATE["is_afk"] = False
+        AFK_STATE["reason"] = ""
+        AFK_STATE["time"] = 0.0
+        AFK_STATE["notified"].clear()
+
+        msg_text = (
+            f"⚡ <b>Chế độ Vắng mặt đã TẮT!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"👋 Chào mừng bạn đã trở lại!\n"
+            f"⏱️ <b>Thời gian vắng mặt:</b> <code>{duration_str}</code>\n"
+            f"📬 <b>Số người đã cố liên hệ:</b> <code>{notified_count}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await event.edit(msg_text, parse_mode="html")
+
+    @client.on(events.NewMessage(incoming=True))
+    async def afk_incoming_listener(event):
+        if not AFK_STATE["is_afk"]:
+            return
+
+        if event.out:
+            return
+
+        # Bỏ qua tin nhắn từ Bot
+        sender = await event.get_sender()
+        if sender and getattr(sender, "bot", False):
+            return
+
+        is_pm = event.is_private
+        is_mention = bool(getattr(event, "mentioned", False))
+
+        if not (is_pm or is_mention):
+            return
+
+        sender_id = event.sender_id
+        if not sender_id:
+            return
+
+        now = time.time()
+        # Cooldown 60 giây mỗi người để tránh spam
+        if sender_id in AFK_STATE["notified"] and (now - AFK_STATE["notified"][sender_id]) < 60:
+            return
+
+        AFK_STATE["notified"][sender_id] = now
+
+        diff = int(now - AFK_STATE["time"])
+        hours, rem = divmod(diff, 3600)
+        mins, secs = divmod(rem, 60)
+        if hours > 0:
+            duration_str = f"{hours}h {mins}m {secs}s"
+        elif mins > 0:
+            duration_str = f"{mins}m {secs}s"
+        else:
+            duration_str = f"{secs}s"
+
+        lastseen_time = datetime.fromtimestamp(AFK_STATE["time"]).strftime("%H:%M:%S %d/%m/%Y")
+        reason = AFK_STATE["reason"]
+
+        reply_text = (
+            f"💤 <b>Chủ sở hữu hiện đang VẮNG MẶT (AFK)!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📝 <b>Lý do:</b> <i>{reason}</i>\n"
+            f"🕒 <b>Lastseen (từ):</b> <code>{lastseen_time}</code>\n"
+            f"⏱️ <b>Đã vắng mặt:</b> <code>{duration_str} trước</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"<i>Tin nhắn đã được lưu lại, chủ bot sẽ phản hồi khi online!</i>"
+        )
+        try:
+            await event.reply(reply_text, parse_mode="html")
+        except Exception:
+            pass
+
+    # ============================================================
+    # 3. NETWORK DIAGNOSTICS (.ping, .domain, .speedtest) & TGTOOLS
+    # ============================================================
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(ping|p)(?:\s+([\s\S]+))?$"))
     async def ping_handler(event):
-        start = time.perf_counter()
-        msg = await event.edit("🏓 <i>Pinging...</i>", parse_mode="html")
-        end = time.perf_counter()
-        ms = (end - start) * 1000
-        await msg.edit(f"🏓 <b>Pong!</b> <code>{ms:.2f}ms</code>", parse_mode="html")
+        target = (event.pattern_match.group(2) or "").strip()
+
+        # Mặc định ping Telegram nếu không truyền target hoặc target là 'tg' / 'telegram'
+        if not target or target.lower() in ("tg", "telegram"):
+            start = time.perf_counter()
+            msg = await event.edit("🏓 <i>Pinging Telegram DC...</i>", parse_mode="html")
+            end = time.perf_counter()
+            ms = (end - start) * 1000
+            await msg.edit(
+                f"🏓 <b>Pong!</b> <code>{ms:.2f}ms</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🛰️ <b>Mục tiêu:</b> Telegram MTProto DC\n"
+                f"📍 <b>Trạng thái:</b> Kết nối bình thường",
+                parse_mode="html"
+            )
+            return
+
+        # Trường hợp ping URL / host cụ thể
+        await event.edit(f"🏓 <i>Đang ping <code>{target}</code>...</i>", parse_mode="html")
+
+        test_url = target if target.startswith(("http://", "https://")) else f"https://{target}"
+        parsed = urllib.parse.urlparse(test_url)
+        hostname = parsed.hostname or target
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        # Phân giải IP
+        resolved_ip = "Không thể phân giải"
+        try:
+            addr_info = await asyncio.get_running_loop().getaddrinfo(hostname, port)
+            if addr_info:
+                resolved_ip = addr_info[0][4][0]
+        except Exception:
+            pass
+
+        # Thực hiện HTTP request hoặc TCP ping
+        status_info = "N/A"
+        try:
+            start = time.perf_counter()
+            async with aiohttp.ClientSession() as session:
+                async with session.get(test_url, timeout=aiohttp.ClientTimeout(total=8), allow_redirects=True) as resp:
+                    ms = (time.perf_counter() - start) * 1000
+                    status_info = f"{resp.status} {resp.reason}"
+        except Exception as e_http:
+            # Fallback sang TCP connection nếu HTTP fail
+            try:
+                start = time.perf_counter()
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(hostname, port), timeout=5
+                )
+                ms = (time.perf_counter() - start) * 1000
+                writer.close()
+                await writer.wait_closed()
+                status_info = f"TCP Port {port} Open"
+            except Exception as e_tcp:
+                await event.edit(
+                    f"❌ <b>Ping thất bại tới <code>{target}</code>:</b>\n"
+                    f"• <b>Lỗi HTTP:</b> <code>{e_http}</code>\n"
+                    f"• <b>Lỗi TCP:</b> <code>{e_tcp}</code>",
+                    parse_mode="html"
+                )
+                return
+
+        out_text = (
+            f"🏓 <b>Pong!</b> <code>{ms:.2f}ms</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 <b>Mục tiêu:</b> <code>{test_url}</code>\n"
+            f"📍 <b>IP máy chủ:</b> <code>{resolved_ip}</code>\n"
+            f"📊 <b>Phản hồi:</b> <code>{status_info}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await event.edit(out_text, parse_mode="html")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(domain|whois|chkdomain)(?:\s+([\s\S]+))?$"))
+    async def domain_check_handler(event):
+        raw_target = (event.pattern_match.group(2) or "").strip()
+        if not raw_target:
+            await event.edit(
+                "❌ <b>Cách dùng:</b> <code>.domain &lt;tên miền&gt;</code>\n"
+                "<i>Ví dụ: <code>.domain google.com</code> hoặc <code>.whois cloudflare.com</code></i>",
+                parse_mode="html"
+            )
+            return
+
+        # Làm sạch domain
+        cleaned = raw_target.lower()
+        if "://" in cleaned:
+            cleaned = cleaned.split("://", 1)[1]
+        cleaned = cleaned.split("/", 1)[0].split(":", 1)[0].strip()
+
+        if not cleaned or "." not in cleaned:
+            await event.edit("❌ <b>Tên miền không hợp lệ!</b> Vui lòng nhập dạng: <code>example.com</code>", parse_mode="html")
+            return
+
+        await event.edit(f"🔍 <i>Đang phân tích thông tin tên miền <code>{cleaned}</code>...</i>", parse_mode="html")
+
+        # 1. Trích xuất TLD
+        parts = cleaned.split(".")
+        tld = f".{parts[-1]}"
+
+        # 2. DNS Over HTTPS (Cloudflare DoH)
+        dns_records = {"A": [], "AAAA": [], "NS": [], "MX": []}
+        async def query_doh(qtype):
+            try:
+                url = f"https://cloudflare-dns.com/dns-query?name={cleaned}&type={qtype}"
+                headers = {"Accept": "application/dns-json"}
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=6)) as r:
+                        if r.status == 200:
+                            data = await r.json(content_type=None)
+                            for ans in data.get("Answer", []):
+                                if ans.get("type") == 1:  # A
+                                    dns_records["A"].append(ans.get("data", ""))
+                                elif ans.get("type") == 28:  # AAAA
+                                    dns_records["AAAA"].append(ans.get("data", ""))
+                                elif ans.get("type") == 2:  # NS
+                                    dns_records["NS"].append(ans.get("data", "").rstrip("."))
+                                elif ans.get("type") == 15:  # MX
+                                    dns_records["MX"].append(ans.get("data", "").rstrip("."))
+            except Exception:
+                pass
+
+        # 3. RDAP WHOIS
+        whois_info = {
+            "registrar": "N/A",
+            "created": "N/A",
+            "expires": "N/A",
+            "status": "N/A"
+        }
+        async def query_rdap():
+            try:
+                url = f"https://rdap.org/domain/{cleaned}"
+                headers = {"User-Agent": "Mozilla/5.0"}
+                async with aiohttp.ClientSession(headers=headers) as s:
+                    async with s.get(url, timeout=aiohttp.ClientTimeout(total=7), allow_redirects=True) as r:
+                        if r.status == 200:
+                            data = await r.json()
+                            for ent in data.get("entities", []):
+                                if "registrar" in ent.get("roles", []):
+                                    vcard = ent.get("vcardArray", [])
+                                    if len(vcard) > 1:
+                                        for item in vcard[1]:
+                                            if item[0] == "fn":
+                                                whois_info["registrar"] = item[3]
+                            for ev in data.get("events", []):
+                                act = ev.get("eventAction")
+                                dt = ev.get("eventDate", "")
+                                if act == "registration" and dt:
+                                    whois_info["created"] = dt[:10]
+                                elif act == "expiration" and dt:
+                                    whois_info["expires"] = dt[:10]
+                            st_list = data.get("status", [])
+                            if st_list:
+                                whois_info["status"] = ", ".join(st_list[:2])
+            except Exception:
+                pass
+
+        # 4. Certificate Transparency Subdomains (crt.name)
+        subdomains = []
+        async def query_crt():
+            nonlocal subdomains
+            try:
+                url = f"https://crt.name/v1/search?apex={cleaned}"
+                async with aiohttp.ClientSession() as s:
+                    async with s.get(url, timeout=aiohttp.ClientTimeout(total=8)) as r:
+                        if r.status == 200:
+                            raw_txt = await r.text()
+                            lines = set()
+                            for line in raw_txt.splitlines():
+                                line = line.strip().lower()
+                                if line and line.endswith(cleaned) and not line.startswith("*."):
+                                    lines.add(line)
+                            subdomains = sorted(list(lines))
+            except Exception:
+                pass
+
+        # Thực thi song song
+        await asyncio.gather(
+            query_doh("A"),
+            query_doh("AAAA"),
+            query_doh("NS"),
+            query_doh("MX"),
+            query_rdap(),
+            query_crt(),
+            return_exceptions=True
+        )
+
+        a_str = ", ".join(dns_records["A"][:3]) if dns_records["A"] else "Không có"
+        if len(dns_records["A"]) > 3:
+            a_str += f" (+{len(dns_records['A']) - 3})"
+
+        ns_str = ", ".join(dns_records["NS"][:3]) if dns_records["NS"] else "N/A"
+        mx_str = ", ".join(dns_records["MX"][:2]) if dns_records["MX"] else "N/A"
+
+        sub_count = len(subdomains)
+        if sub_count > 0:
+            sample_subs = subdomains[:8]
+            sub_list_str = "\n".join([f"  • <code>{sub}</code>" for sub in sample_subs])
+            if sub_count > 8:
+                sub_list_str += f"\n  • <i>...và {sub_count - 8} subdomains khác</i>"
+        else:
+            sub_list_str = "  • <i>Không tìm thấy subdomain công khai</i>"
+
+        out_msg = (
+            f"🌐 <b>THÔNG TIN TÊN MIỀN:</b> <code>{cleaned}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🏷️ <b>Định dạng TLD:</b> <code>{tld}</code>\n\n"
+            f"📋 <b>WHOIS / RDAP:</b>\n"
+            f"• <b>Nhà đăng ký:</b> {whois_info['registrar']}\n"
+            f"• <b>Ngày đăng ký:</b> <code>{whois_info['created']}</code>\n"
+            f"• <b>Ngày hết hạn:</b> <code>{whois_info['expires']}</code>\n"
+            f"• <b>Trạng thái:</b> <code>{whois_info['status']}</code>\n\n"
+            f"📡 <b>BẢN GHI DNS (DoH):</b>\n"
+            f"• <b>IPv4 (A):</b> <code>{a_str}</code>\n"
+            f"• <b>Nameservers (NS):</b> <code>{ns_str}</code>\n"
+            f"• <b>Mail Servers (MX):</b> <code>{mx_str}</code>\n\n"
+            f"📜 <b>CERTIFICATE TRANSPARENCY (crt.name):</b>\n"
+            f"• <b>Tổng số subdomains:</b> <code>{sub_count}</code>\n"
+            f"{sub_list_str}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━"
+        )
+        await event.edit(out_msg, parse_mode="html")
+
+    @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(speedtest|speed)$"))
+    async def speedtest_handler(event):
+        await event.edit(
+            "🚀 <b>Đang khởi chạy Speedtest...</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━━\n"
+            "🔍 <i>Đang tìm kiếm server tối ưu...</i>\n"
+            "⏱️ <i>Quá trình đo đạc mất khoảng 15-25 giây...</i>",
+            parse_mode="html"
+        )
+
+        def run_speed():
+            import speedtest
+            st = speedtest.Speedtest(secure=True)
+            st.get_best_server()
+            st.download()
+            st.upload()
+            return st.results.dict()
+
+        try:
+            loop = asyncio.get_running_loop()
+            res = await loop.run_in_executor(None, run_speed)
+
+            dl_mbps = (res.get("download", 0) or 0) / (10**6)
+            ul_mbps = (res.get("upload", 0) or 0) / (10**6)
+            ping_ms = res.get("ping", 0) or 0
+
+            server = res.get("server", {})
+            s_name = server.get("name", "Unknown")
+            s_country = server.get("country", "")
+            s_sponsor = server.get("sponsor", "")
+
+            client_info = res.get("client", {})
+            isp = client_info.get("isp", "Unknown ISP")
+            client_ip = client_info.get("ip", "N/A")
+
+            out_text = (
+                f"⚡ <b>KẾT QUẢ SPEEDTEST MẠNG</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📥 <b>Download:</b> <code>{dl_mbps:.2f} Mbps</code>\n"
+                f"📤 <b>Upload:</b> <code>{ul_mbps:.2f} Mbps</code>\n"
+                f"🏓 <b>Độ trễ (Ping):</b> <code>{ping_ms:.2f} ms</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🛰️ <b>Server:</b> {s_name}, {s_country} ({s_sponsor})\n"
+                f"🏢 <b>Nhà mạng (ISP):</b> {isp} (<code>{client_ip}</code>)\n"
+                f"━━━━━━━━━━━━━━━━━━━━━"
+            )
+            await event.edit(out_text, parse_mode="html")
+        except Exception as e:
+            await event.edit(f"❌ <b>Lỗi khi đo Speedtest:</b> <code>{e}</code>", parse_mode="html")
 
     @client.on(events.NewMessage(outgoing=True, pattern=r"^\.(alive|statusbot)$"))
     async def alive_handler(event):
